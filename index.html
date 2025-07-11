@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>Server Audit</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #091931;
+      color: #333;
+      margin: 2rem;
+    }
+    h1 {
+      text-align: center;
+      color: #2c3e50;
+    }
+    .section {
+      margin-top: 2rem;
+      border-left: 4px solid #2980b9;
+      padding-left: 1rem;
+      background: #fff;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+      border-radius: 8px;
+      padding: 1rem;
+    }
+    .danger {
+      color: #c0392b;
+      font-weight: bold;
+    }
+    .good {
+      color: green;
+      font-weight: bold;
+    }
+    pre {
+      background: #ecf0f1;
+      padding: 1rem;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      margin-top: 1rem;
+    }
+    #map {
+      height: 500px;
+      margin-top: 2rem;
+      border-radius: 8px;
+    }
+    /* Container für beide Diagramme nebeneinander */
+    #chartsContainer {
+      display: flex;
+      gap: 2rem;
+      margin-top: 2rem;
+    }
+    #barChart, #pieChart {
+      flex: 1 1 50%;
+      height: 400px;
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+      padding: 1rem;
+    }
+    #chartsContainer:nth-of-type(2) {
+      display: flex;
+      gap: 2rem;
+      margin-top: 2rem;
+    }
+
+    #http-methods-charts-container {
+  display: flex;
+  gap: 2rem;
+  margin-top: 2rem;
+}
+
+#http-methods-pie-normal,
+#http-methods-pie-danger {
+  flex: 1 1 50%;
+  height: 400px;
+  background: #fff;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+h2 {
+  text-align: center;
+}
+p {
+  font-weight: bold;
+  padding: 0;
+}
+.collapsible {
+  cursor: pointer;
+  background-color: #dfe6e9;
+  color: #2d3436;
+  padding: 0.5rem 1rem;
+  border: none;
+  text-align: left;
+  outline: none;
+  font-size: 1rem;
+  border-radius: 5px;
+  margin-top: 1rem;
+}
+
+.collapsible.active {
+  background-color: #b2bec3;
+}
+
+.collapsible-content {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease-out;
+  background-color: #ecf0f1;
+  padding: 0 1rem;
+  border-radius: 0 0 5px 5px;
+}
+.collapsible-content.open {
+  padding: 1rem;
+  max-height: 1000px; /* groß genug, um alles anzuzeigen */
+}
+.styled-select { width: 240px; height: 34px; overflow: hidden; border: 1px solid #ccc; border-radius: 10px; text-align:center; font-weight:bold;}
+
+option {width: 100%; text-align:center;}
+
+  </style>
+</head>
+<body>
+  <div style="text-align:right; margin-bottom: 1rem;">
+    <label for="langSwitch" style="color:white; font-weight: bold;">Language:</label>
+    <select id="langSwitch" onchange="switchLanguage(this.value)">
+      <option value="en" selected>English</option>
+      <option value="de">Deutsch</option>
+    </select>
+  </div>
+
+  <h1 style="color:white;"></h1>
+  <h2 id="date" style="color: white;">Zusammenfassung der letzten 3 Tage</h2>
+
+  <select style="width:100%" name="folders" class="styled-select" id="folders" onchange="switchFolder(this.value)">
+	<option value="1">Default</option>
+	<option value="2">Chat</option>
+	<option value="3">Nextcloud</option>
+	<option value="4">vt</option>
+	<option value="5">test</option>
+  </select>
+    
+  <div id="nmap" class="section"></div>
+  <div id="system" class="section"></div>
+  <div id="map" class="section"></div>
+  <div id="chartsContainer" class="section">
+    <div id="barChart"></div>
+    <div id="pieChart"></div>
+  </div>
+<div id="uriChart" class="section" style="height: 600px;"></div>
+
+<div id="http-methods-charts-container" class="section">
+  <div id="http-methods-pie-normal"></div>
+  <div id="http-methods-pie-danger"></div>
+</div>
+
+<div id="accessChart" class="section" style="height: 600px;"></div>
+
+  <div id="iis" class="section"></div>
+  
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+
+  <script>
+    async function loadJSON(path) {
+      const response = await fetch(path);
+      if (!response.ok) throw new Error(`Fehler beim Laden von ${path}`);
+      return response.json();
+    }
+
+    function toggleCollapsible(id) {
+      const content = document.getElementById(id);
+      if (!content) return;
+      content.classList.toggle("open");
+
+      const button = content.previousElementSibling;
+      if (button && button.classList.contains("collapsible")) {
+        button.classList.toggle("active");
+      }
+    }
+
+
+    async function loadReportsFromFolder(folder) {
+      try {
+        let index = await loadJSON(`${folder}/index.json`);
+
+        if (!Array.isArray(index)) {
+          index = [index];
+        }
+        const data = await Promise.all(
+          index.sort().map(file => loadJSON(`${folder}/${file}`))
+        );
+        return data;
+      } catch (e) {
+        console.error(`Fehler beim Laden von ${folder}:`, e);
+        return [];
+      }
+    } 
+
+
+async function loadReportsFromFolderSystem(folderPath) {
+  const index = await loadJSON(`${folderPath}/index.json`);
+  const results = [];
+
+  for (const filename of index) {
+    const data = await loadJSON(`${folderPath}/${filename}`);
+
+    if (Array.isArray(data)) {
+      data.forEach(item => item.sourceFile = filename);
+      results.push(...data);
+    } else if (typeof data === 'object') {
+      data.sourceFile = filename;
+      results.push(data);
+    }
+  }
+
+  return results;
+}
+
+
+    function parseNmap(entry) {
+    
+        if (!entry) {
+          console.warn("parseNmap: Eintrag ist undefined oder null:", entry);
+          return `<p>Ungültiger Scan-Eintrag</p>`;
+        }
+
+        if (typeof entry.Output !== 'string') {
+          console.warn("parseNmap: Output fehlt oder kein String in Eintrag:", entry);
+          return `<h3>${entry.Server || 'Unbekannter Server'}</h3><p>Keine Scan-Daten verfügbar.</p>`;
+        }
+
+
+      let risk = '';
+      let good = '';
+      const risks = [];
+      const goods = [];
+
+      if (entry.Output.includes("23/tcp")) risks.push(translations[currentLang].p23);
+      if (entry.Output.includes("22/tcp")) risks.push(translations[currentLang].p22);
+      if (entry.Output.includes("21/tcp")) risks.push(translations[currentLang].p21);
+      if (entry.Output.includes("3389/tcp")) risks.push(translations[currentLang].p3389);
+      if (entry.Output.includes("445/tcp")) risks.push(translations[currentLang].p445);
+      if (entry.Output.includes("443/tcp") && entry.Output.includes("80/tcp") && risk == '') goods.push(translations[currentLang].pweb);
+
+      
+      good += goods.map(r =>  `<p class="good"> ${r}</p>`).join('');
+      risk += risks.map(r => `<p class="danger">⚠️ ${r}</p>`).join('');
+
+      return `<h3>${entry.Server}</h3><pre>${entry.Output}</pre>${risk}</pre>${good}`;
+    }
+    function parseSystem(entry) {
+      
+      let html = "";
+      html = `<p>${translations[currentLang].stDefender} ${entry.DefenderStatus?.AntispywareEnabled ? 'Ja' : 'Nein'}</p>
+                  <p>${translations[currentLang].stUpdates} ${entry.PendingUpdates ?? 'Unbekannt'}</p>
+                  <p>Firewall-Status: ${
+                    entry.FirewallState
+                      ? entry.FirewallState.map(f => `${f.Name}: ${f.Enabled ? 'An' : 'Aus'}`).join(', ')
+                      : 'Nicht verfügbar'
+                  }</p>`;
+
+      const vulns = entry.TopVulnerabilities?.cves;
+      if (Array.isArray(vulns) && vulns.length > 0) {
+        const uniqueId = `vuln-list-${entry.OSBuild.replace(/\./g, '-')}`;
+
+        html += `
+          <button class="collapsible" onclick="toggleCollapsible('${uniqueId}')">
+            ⚠️ ${translations[currentLang].foundvuln} (Build ${entry.OSBuild})
+          </button>
+          <div class="collapsible-content" id="${uniqueId}">
+            <ul>
+        `;
+
+        vulns.forEach(v => {
+          html += `<li style="margin-bottom: 1rem;">
+            <strong>${v.cve_id}</strong>: ${v.summary}<br>
+            🔒 CVSS: <strong>${v.cvss}</strong> |
+            📆 ${new Date(v.published_time).toLocaleDateString()}<br>
+            🔗 <a href="${v.references?.[0]}" target="_blank">Details</a>
+          </li>`;
+        });
+
+        html += `</ul></div>`;
+      }
+
+      return html;
+    }
+
+
+
+    function buildIISReport(iisData, abuseData) {
+      const suspicious = iisData.filter(e => /^4|^5/.test(e["sc-status"]));
+      const bots = iisData.filter(e => /bot|crawl|scanner/i.test(e["cs(User-Agent)"]));
+      const threats = abuseData.filter(ip => ip.abuseConfidenceScore >= 50);
+
+      let html = `<h2>${translations[currentLang].iisSummary}</h2>
+        <p>${translations[currentLang].totalLogs}: <strong>${iisData.length}</strong></p>
+        <p>${translations[currentLang].errorRequests}: <strong>${suspicious.length}</strong></p>
+        <p>${translations[currentLang].suspiciousAgents}: <strong>${bots.length}</strong></p>`;
+
+      if (threats.length > 0) {
+        html += `<div class="danger"><p><strong>${translations[currentLang].badIPs}</strong></p>`;
+        threats.forEach(ip => {
+          html += `<p>🔴 ${ip.ip} – Score: ${ip.abuseConfidenceScore}, Land: ${ip.countryCode || 'Unbekannt'}, Domain: ${ip.domain || '-'}</p>`;
+        });
+        html += `</div>`;
+      }
+
+      return html;
+    }
+    function parseVulnerabilityReport(entry) {
+      const vulns = entry.TopVulnerabilities;
+
+      if (!vulns || typeof vulns !== 'object') {
+        return `<p>Keine Schwachstellen-Daten vorhanden.</p>`;
+      }
+
+      const vulnArray = Array.isArray(vulns)
+        ? vulns
+        : Object.values(vulns);
+
+      if (vulnArray.length === 0) {
+        return `<p>Keine Schwachstellen gefunden.</p>`;
+      }
+
+      // let html = `<h3>Top Sicherheitslücken für Build ${entry.OSBuild}</h3><ul>`;
+      vulnArray.forEach(cve => {
+        html += `<li>
+          <strong class="danger">${cve.cve}</strong>: 
+          ${cve.summary || 'Keine Beschreibung'} 
+          <br>🔒 CVSS: <strong>${cve.cvss}</strong>
+        </li>`;
+      });
+      html += '</ul>';
+      return html;
+    }
+
+
+
+
+
+    const countryCoordinates = {
+      "DE": [51.1657, 10.4515],
+      "US": [37.0902, -95.7129],
+      "FR": [46.603354, 1.888334],
+      "RU": [61.524, 105.3188],
+      "CN": [35.8617, 104.1954],
+      "BR": [-14.235, -51.9253],
+      "IN": [20.5937, 78.9629],
+      "CA": [56.1304, -106.3468],
+      "GB": [55.3781, -3.4360],
+      "NL": [52.1326, 5.2913],
+      "IT": [41.8719, 12.5674],
+      "ES": [40.4637, -3.7492],
+      "AU": [-25.2744, 133.7751],
+      "JP": [36.2048, 138.2529],
+      "MX": [23.6345, -102.5528],
+      "ZA": [-30.5595, 22.9375],
+      "KR": [35.9078, 127.7669],
+      "SE": [60.1282, 18.6435],
+      "CH": [46.8182, 8.2275],
+      "BE": [50.8503, 4.3517],
+      "AT": [47.5162, 14.5501],
+      "PL": [51.9194, 19.1451],
+      "NO": [60.472, 8.4689],
+      "FI": [61.9241, 25.7482],
+      "DK": [56.2639, 9.5018],
+      "IE": [53.1424, -7.6921],
+      "PT": [39.3999, -8.2245],
+      "GR": [39.0742, 21.8243],
+      "CZ": [49.8175, 15.473],
+      "HU": [47.1625, 19.5033],
+      "TR": [38.9637, 35.2433],
+      "UA": [48.3794, 31.1656],
+      "NZ": [-40.9006, 174.886],
+      "SG": [1.3521, 103.8198],
+      "AE": [23.4241, 53.8478],
+      "AR": [-38.4161, -63.6167],
+      "CL": [-35.6751, -71.543]
+    };
+
+    function renderMap(ipData) {
+      const map = L.map('map').setView([20, 0], 2);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 18,
+        attribution: '&copy; OpenStreetMap Mitwirkende'
+      }).addTo(map);
+
+      ipData.forEach(entry => {
+        let coords = null;
+
+        if (entry.countryCode && countryCoordinates[entry.countryCode]) {
+          coords = countryCoordinates[entry.countryCode];
+        }
+
+        if (coords) {
+          const baseRadius = 1;
+          const scaleFactor = 0.01;
+          const radius = baseRadius + (entry.sourceCount ? entry.sourceCount * scaleFactor : 0);
+
+          const popupText = `
+            <strong>${entry.ip}</strong><br/>
+            Score: ${entry.abuseConfidenceScore}<br/>
+            ${entry.countryCode || 'Unbekannt'}<br/>
+            ${entry.domain || ''}
+          `;
+          L.circleMarker(coords, {
+            radius: radius,
+            color: entry.abuseConfidenceScore >= 50 ? 'red' : 'blue',
+            fillOpacity: 0.6
+          }).addTo(map).bindPopup(popupText);
+        }
+      });
+    }
+
+    function renderBarChart(abuseData) {
+      renderBarChart.lastData = abuseData;
+
+      const countsByCountry = {};
+      abuseData.forEach(entry => {
+        const c = entry.countryCode || 'Unknown';
+        countsByCountry[c] = (countsByCountry[c] || 0) + (entry.sourceCount || 0);
+      });
+
+      const sorted = Object.entries(countsByCountry).sort((a, b) => b[1] - a[1]);
+      const countries = sorted.map(e => e[0]);
+      const counts = sorted.map(e => e[1]);
+
+      const chartDom = document.getElementById('barChart');
+      const myChart = echarts.init(chartDom);
+
+      const option = {
+        title: {
+          text: translations[currentLang].barChartTitle,
+          left: 'center',
+          textStyle: { color: '#2c3e50', fontSize: 18, fontWeight: 'bold' }
+        },
+        tooltip: {},
+        xAxis: {
+          type: 'category',
+          data: countries,
+          axisLabel: { rotate: 45, interval: 0 }
+        },
+        yAxis: {
+          type: 'value',
+          name: translations[currentLang].barChartYAxis
+        },
+        series: [{
+          data: counts,
+          type: 'bar',
+          itemStyle: { color: '#2980b9' },
+          emphasis: { itemStyle: { color: '#c0392b' } }
+        }],
+        grid: { bottom: 80 }
+      };
+
+      myChart.setOption(option);
+      window.addEventListener('resize', () => myChart.resize());
+    }
+
+    function renderPieChart(abuseData) {
+      renderPieChart.lastData = abuseData;
+
+      let malicious = 0;
+      let safe = 0;
+
+      abuseData.forEach(entry => {
+        const count = entry.sourceCount || 0;
+        if (entry.abuseConfidenceScore >= 50) {
+          malicious += count;
+        } else {
+          safe += count;
+        }
+      });
+
+      const chartDom = document.getElementById('pieChart');
+      const myChart = echarts.init(chartDom);
+
+      const option = {
+        title: {
+          text: translations[currentLang].pieChart,
+          left: 'center',
+          textStyle: {color: '#2c3e50', fontSize: 18, fontWeight: 'bold'}
+        },
+        tooltip: {
+          trigger: 'item'
+        },
+        legend: {
+          bottom: 10,
+          left: 'center'
+        },
+        series: [
+          {
+            name: 'Zugriffe',
+            type: 'pie',
+            radius: ['40%', '70%'],
+            avoidLabelOverlap: false,
+            label: {
+              show: true,
+              position: 'outside',
+              formatter: '{b}: {c} ({d}%)'
+            },
+            emphasis: {
+              label: {
+                show: true,
+                fontSize: '16',
+                fontWeight: 'bold'
+              }
+            },
+            labelLine: {
+              show: true
+            },
+            data: [
+              {value: malicious, name:  translations[currentLang].malicious, itemStyle: {color: '#c0392b'}},
+              {value: safe, name: translations[currentLang].nonmalicious, itemStyle: {color: '#27ae60'}}
+            ]
+          }
+        ]
+      };
+
+      myChart.setOption(option);
+      window.addEventListener('resize', () => myChart.resize());
+    }
+
+  function renderUriChart(iisData, abuseData) {
+      renderUriChart.lastData1 = iisData; 
+      renderUriChart.lastData2 = abuseData;
+
+    const ipThreats = {};
+    abuseData.forEach(entry => {
+      ipThreats[entry.ip] = entry.abuseConfidenceScore > 0;
+    });
+
+    const uriCounts = {};
+
+    iisData.forEach(entry => {
+      const uri = entry["cs-uri-stem"] || "/";
+      const ip = entry["c-ip"];
+      const isMalicious = ipThreats[ip] || false;
+
+      if (!uriCounts[uri]) uriCounts[uri] = { safe: 0, malicious: 0 };
+
+      if (isMalicious) {
+        uriCounts[uri].malicious++;
+      } else {
+        uriCounts[uri].safe++;
+      }
+    });
+
+    const sorted = Object.entries(uriCounts)
+      .sort((a, b) => (b[1].safe + b[1].malicious) - (a[1].safe + a[1].malicious))
+      .slice(0, 15);
+
+    const uris = sorted.map(e => e[0]);
+    const safeCounts = sorted.map(e => e[1].safe);
+    const maliciousCounts = sorted.map(e => e[1].malicious);
+
+    const chartDom = document.getElementById('uriChart');
+    const myChart = echarts.init(chartDom);
+
+    const option = {
+      title: {
+        text: translations[currentLang].uriChart,
+        left: 'center',
+        textStyle: { fontSize: 18, fontWeight: 'bold' }
+      },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      legend: {
+        bottom: 0,
+        data: [translations[currentLang].nonmalicious, [translations[currentLang].malicious]]
+      },
+      xAxis: {
+        type: 'category',
+        data: uris.map(uri => uri.length > 30 ? uri.slice(0, 27) + '...' : uri),
+        axisLabel: {
+          rotate: 0,
+          interval: 0,
+          formatter: function(value) {
+            return value.length > 10 ? value.slice(0, 15) + '...' : value;
+          }
+        }
+      },
+      yAxis: {
+        type: 'value',
+        name: translations[currentLang].barChartYAxis
+      },
+      series: [
+        {
+          name: translations[currentLang].nonmalicious,
+          type: 'bar',
+          stack: translations[currentLang].total,
+          data: safeCounts,
+          itemStyle: { color: '#3498db' }
+        },
+        {
+          name: translations[currentLang].malicious,
+          type: 'bar',
+          stack: translations[currentLang].total,
+          data: maliciousCounts,
+          itemStyle: { color: '#e74c3c' }
+        }
+      ],
+      grid: { bottom: 80 }
+    };
+
+    myChart.setOption(option);
+    window.addEventListener('resize', () => myChart.resize());
+}
+
+function renderHttpMethodsTwoPieCharts(iisData, abuseData) {
+  renderHttpMethodsTwoPieCharts.lastData1 = iisData; 
+  renderHttpMethodsTwoPieCharts.lastData2 = abuseData;
+
+  const dangerousIPs = new Set(abuseData.filter(ip => ip.abuseConfidenceScore >= 50).map(ip => ip.ip));
+
+
+  const countsNormal = {};
+  const countsDanger = {};
+
+  iisData.forEach(entry => {
+    const method = entry["cs-method"] || "UNKNOWN";
+    const ip = entry["c-ip"];
+    if (dangerousIPs.has(ip)) {
+      countsDanger[method] = (countsDanger[method] || 0) + 1;
+    } else {
+      countsNormal[method] = (countsNormal[method] || 0) + 1;
+    }
+  });
+
+
+  function toChartData(counts) {
+    return Object.entries(counts).map(([method, val]) => ({
+      name: method,
+      value: val
+    }));
+  }
+
+
+  let containerNormal = document.getElementById('http-methods-pie-normal');
+  let containerDanger = document.getElementById('http-methods-pie-danger');
+
+  const optionNormal = {
+    title: { text: translations[currentLang].httpNormal, left: 'center' },
+    tooltip: { trigger: 'item' },
+    legend: { orient: 'vertical', left: 'left', top: 'middle' },
+    series: [{
+      name: translations[currentLang].barChartYAxis,
+      type: 'pie',
+      radius: '60%',
+      data: toChartData(countsNormal),
+      label: { formatter: '{b}: {c} ({d}%)' },
+      itemStyle: { color: '#3398DB' }
+    }]
+  };
+
+  const optionDanger = {
+    title: { text: translations[currentLang].httpDanger, left: 'center' },
+    tooltip: { trigger: 'item' },
+    legend: { orient: 'vertical', left: 'left', top: 'middle' },
+    series: [{
+      name: translations[currentLang].barChartYAxis,
+      type: 'pie',
+      radius: '60%',
+      data: toChartData(countsDanger),
+      label: { formatter: '{b}: {c} ({d}%)' },
+      itemStyle: { color: '#c0392b' }
+    }]
+  };
+
+  echarts.init(containerNormal).setOption(optionNormal);
+  echarts.init(containerDanger).setOption(optionDanger);
+}
+
+function buildAccessChart(iisData) {
+    const accessCounts = {};
+
+    iisData.forEach(entry => {
+      const date = entry.date;
+      if (!date) return;
+      accessCounts[date] = (accessCounts[date] || 0) + 1;
+    });
+
+    const sortedDates = Object.keys(accessCounts).sort();
+    const counts = sortedDates.map(d => accessCounts[d]);
+
+    const chartDom = document.getElementById('accessChart');
+    const chart = echarts.init(chartDom);
+
+    const option = {
+      title: {
+        text: translations[currentLang]?.accessPerDay || 'Zugriffe pro Tag',
+        left: 'center'
+      },
+      tooltip: { trigger: 'axis' },
+      xAxis: {
+        type: 'category',
+        data: sortedDates,
+        axisLabel: { rotate: 45 }
+      },
+      yAxis: {
+        type: 'value',
+        name: translations[currentLang]?.barChartYAxis || 'Zugriffe'
+      },
+      series: [{
+        name: translations[currentLang].barChartYAxis,
+        type: 'line',
+        data: counts,
+        itemStyle: {
+          color: '#5470C6'
+        }
+      }]
+    };
+
+    chart.setOption(option);
+  }
+
+
+function renderList(title, data, parser, alt) {
+  
+  renderList.lastCalls = renderList.lastCalls || {};
+  renderList.lastCalls[title] = { title, data, parser, alt };
+
+  console.log("LastCall gesetzt für:", title);
+  const div = document.getElementById(title);
+  div.innerHTML = '';
+
+  const header = document.createElement('h2');
+  header.textContent = alt;
+  div.appendChild(header);
+
+  if (!Array.isArray(data)) {
+    const p = document.createElement('p');
+    p.textContent = 'Keine Daten (data ist kein Array)';
+    div.appendChild(p);
+    console.warn(`${title}: data ist kein Array`, data);
+    return;
+  }
+
+  if (data.length === 0) {
+    const p = document.createElement('p');
+    p.textContent = 'Keine Daten (leeres Array)';
+    div.appendChild(p);
+    return;
+  }
+
+  data.forEach((entry, idx) => {
+    if (!entry || typeof entry !== 'object') {
+      console.warn(`${title}: Eintrag ist kein Objekt bei Index ${idx}`, entry);
+      const p = document.createElement('p');
+      p.textContent = `Ungültiger Eintrag an Index ${idx}`;
+      div.appendChild(p);
+
+      return;
+    }
+
+    if (typeof parser !== 'function') {
+      console.warn(`${title}: parser ist keine Funktion`);
+      const p = document.createElement('p');
+      p.textContent = 'Parser ist keine Funktion';
+      div.appendChild(p);
+
+      return;
+    }
+
+    try {
+
+      const parsed = parser(entry);
+      if (parsed) {
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = parsed;
+        div.appendChild(wrapper);
+      }
+    } catch (e) {
+      console.error(`${title}: Fehler beim Parsen des Eintrags Index ${idx}`, e);
+      const p = document.createElement('p');
+      p.textContent = `Fehler beim Parsen des Eintrags Index ${idx}`;
+      div.appendChild(p);
+    }
+  });
+}
+
+function mergeSystemData(systemEntries, vulnEntries) {
+  const merged = {};
+
+  // Zuerst system_*.json → Basisdaten
+  systemEntries.forEach(entry => {
+    const build = entry.OSBuild;
+    if (!build) return;
+
+    merged[build] = {
+      OSBuild: build,
+      DefenderStatus: entry.DefenderStatus,
+      PendingUpdates: entry.PendingUpdates,
+      FirewallState: entry.FirewallState,
+    };
+  });
+
+
+  vulnEntries.forEach(entry => {
+    const build = entry.OSBuild;
+    if (!build) return;
+
+    if (!merged[build]) {
+
+      return;
+    }
+
+    merged[build].TopVulnerabilities = entry.TopVulnerabilities;
+  });
+
+  return Object.values(merged);
+}
+
+	function switchFolder(folder){
+		init(folder);
+		window.location.reload();
+	}
+
+	addEventListener("DOMContentLoaded", (event) => {
+		let defaultVal = document.getElementById("folders").value;
+		init(defaultVal);
+	});
+	
+
+
+    //(
+	async function init(folder) {
+      try {
+	  
+	  	let selectedFolder = folder;//document.getElementById("folders").value;
+
+		console.log(selectedFolder)
+
+        const index = await loadJSON(`reports/${selectedFolder}/iis/index.json`);
+
+        const logFile = index.find(name => name.startsWith("iislog_"));
+        const abuseFile = index.find(name => name.startsWith("checked_ips_"));
+
+
+        if (!logFile || !abuseFile) {
+          document.getElementById("iis").innerHTML = "<p class='danger'>Fehler: Benötigte Dateien nicht gefunden.</p>";
+          return;
+        }
+
+
+        const iisData = await loadJSON(`reports/${selectedFolder}/iis/${logFile}`);
+        const abuseData = await loadJSON(`reports/${selectedFolder}/iis/${abuseFile}`);
+        const nmapData = await loadReportsFromFolder(`reports/${selectedFolder}/nmap`);
+
+
+        const allSystemData = await loadReportsFromFolderSystem(`reports/${selectedFolder}/system`);
+
+        const systemEntries = allSystemData.filter(e => e.sourceFile?.startsWith('system_'));
+        const vulnEntries = allSystemData.filter(e => e.sourceFile?.startsWith('vulnerabilities_'));
+
+        const mergedSystemData = mergeSystemData(systemEntries, vulnEntries);
+
+
+        renderList("system", mergedSystemData, parseSystem, translations[currentLang].system);
+        renderList("nmap", nmapData.flat(), parseNmap, "Offene Ports auf Server: ");
+
+        console.log("System Builds:", systemEntries.map(e => e.OSBuild));
+        console.log("Vulnerability Builds:", vulnEntries.map(e => e.OSBuild));
+
+        switchLanguage("en")
+
+        buildIISReport.lastData = { iisData, abuseData };
+        document.getElementById("iis").innerHTML = buildIISReport(iisData, abuseData);
+		renderMap(abuseData); 
+        renderUriChart(iisData, abuseData);
+        renderBarChart(abuseData);
+        renderPieChart(abuseData);
+		buildAccessChart(iisData);
+        renderHttpMethodsTwoPieCharts(iisData, abuseData);
+
+        const datetimePart = logFile.match(/iislog_(.+)\.json/)[1]; 
+        const dateTimeString = datetimePart.replace('_', ' ').replace(/-/g, (match, offset) => {
+          return offset > 10 ? ':' : '-';
+        });
+        const logDate = new Date(dateTimeString);
+        const fromDate = new Date(logDate);
+        fromDate.setDate(fromDate.getDate() - 5);
+        function formatDate(d) {
+          const pad = n => n.toString().padStart(2, '0');
+          return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        }
+
+
+        
+        document.getElementById("date").innerHTML = `${formatDate(fromDate)} - ${formatDate(logDate)}`;
+
+  (iisData, abuseData); 
+      } catch (error) {
+        document.getElementById("iis").innerHTML = `<p class="danger">Fehler beim Laden der Daten: ${error.message}</p>`;
+        console.error(error);
+      }
+    }//)();
+
+    const translations = {
+  en: {
+    title: "Application Server",
+    summary: "Summary of the last 3 days",
+    system: "System Status & Vulnerabilities:",
+    nmap: "Open Ports on Servers:",
+    iisSummary: "Summary",
+    totalLogs: "Total log entries",
+    errorRequests: "Error requests (4xx/5xx)",
+    suspiciousAgents: "Suspicious UserAgents",
+    badIPs: "Dangerous IPs according to AbuseIPDB",
+    barChart: "Accesses per Country",
+    pieChart: "Malicious vs. Benign Accesses",
+    uriChart: "Requests per URI (Top 15)",
+    httpNormal: "HTTP Methods - Benign Access",
+    httpDanger: "HTTP Methods - Malicious Access",
+    barChartTitle: "Requests per Country",
+    barChartYAxis: "Requests",
+    malicious: "Malicious",
+    nonmalicious: "Non-malicious",
+    total: "total",
+    p23: "Telnet-Port 23 open",
+    p22: "SSH-Port 22 open",
+    p21: "FTP-Port 21 open",
+    p3389: "RDP-Port 3389 open",
+    p445: "SMB-Port 445 open",
+    pweb: "Only Port 80 and 443 open, all Ok",
+    stDefender: "Windows-Defender active: ",
+    stUpdates: "Pending Updates: ",
+    foundvuln: "Vulnerabilities found",
+	accessPerDay: "Requests per day",
+    
+  
+  },
+  de: {
+    title: "Anwendungsserver",
+    summary: "Zusammenfassung der letzten 3 Tage",
+    system: "Systemstatus & Schwachstellen:",
+    nmap: "Offene Ports auf Server:",
+    iisSummary: "Zusammenfassung",
+    totalLogs: "Gesamtanzahl Logeinträge",
+    errorRequests: "Fehlerhafte Anfragen (4xx/5xx)",
+    suspiciousAgents: "Verdächtige UserAgents",
+    badIPs: "Gefährliche IPs laut AbuseIPDB",
+    barChart: "Zugriffe pro Land",
+    pieChart: "Schädliche vs. unbedenkliche Zugriffe",
+    uriChart: "Anfragen pro URI (Top 15)",
+    httpNormal: "HTTP Methoden - Positive Zugriffe",
+    httpDanger: "HTTP Methoden - Gefährliche Zugriffe",
+    barChartTitle: "Zugriffe pro Land",
+    barChartYAxis: "Zugriffe",
+    malicious: "Schädlich",
+    nonmalicious: "Unschädlich",
+    total: "gesamt",
+    p23: "Telnet-Port 23 Offen",
+    p22: "SSH-Port 22 Offen",
+    p21: "FTP-Port 21 Offen",
+    p3389: "RDP-Port 3389 Offen",
+    p445: "SMB-Port 445 Offen",
+    pweb: "Nur Port 80 und 443 freigegeben, alles Ok",
+    stDefender: "Windows-Defender aktiv: ",
+    stUpdates: "Ausstehende Updates: ",
+    foundvuln: "Gefundene Schwachstellen",
+	accessPerDay: "Zugriffe pro Tag",
+   
+  }
+};
+
+let currentLang = "en";
+
+function switchLanguage(lang) {
+  currentLang = lang;
+
+  document.querySelector("h1").textContent = translations[lang].title;
+  document.querySelector("#date").textContent = translations[lang].summary;
+  document.querySelector("#system h2") && (document.querySelector("#system h2").textContent = translations[lang].system);
+  document.querySelector("#nmap h2") && (document.querySelector("#nmap h2").textContent = translations[lang].nmap);
+  document.querySelector("#iis h2") && (document.querySelector("#iis h2").textContent = translations[lang].iisSummary);
+
+  try {
+    renderBarChart.lastData && renderBarChart(renderBarChart.lastData);
+    renderPieChart.lastData && renderPieChart(renderPieChart.lastData);
+    renderUriChart.lastData1 && renderUriChart(renderUriChart.lastData1, renderUriChart.lastData2);
+    renderHttpMethodsTwoPieCharts.lastData1 && renderHttpMethodsTwoPieCharts(renderHttpMethodsTwoPieCharts.lastData1, renderHttpMethodsTwoPieCharts.lastData2) 
+
+
+    if (renderList.lastCalls) {
+      for (const [title, { data, parser, alt }] of Object.entries(renderList.lastCalls)) {
+        const translatedAlt = translations[currentLang][title] || alt;
+        renderList(title, data, parser, translatedAlt);
+      }
+    }
+    if (buildIISReport.lastData) {
+      const { iisData, abuseData } = buildIISReport.lastData;
+      document.getElementById("iis").innerHTML = buildIISReport(iisData, abuseData);
+    }
+ 
+  } catch (e) {
+    console.warn("Fehler bei Übersetzung von Diagrammen:", e);
+  } 
+}
+
+  </script>
+</body>
+</html>

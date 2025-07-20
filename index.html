@@ -8,7 +8,7 @@
   <style>
     body {
       font-family: sans-serif;
-      background: #091931;
+      background: #292a2c;
       color: #000000;
       margin: 2rem;
     }
@@ -81,6 +81,12 @@
       margin-top: 2rem;
     }
 
+    #systemAndNmapContainer {
+      display: flex;
+      gap: 2rem;
+      margin-top: 2rem;
+    }
+
     #http-methods-pie-normal,
     #http-methods-pie-danger {
       flex: 1 1 50%;
@@ -146,7 +152,13 @@
       width: 100%;
       text-align: center;
     }
-  </style>
+
+   .product-block { margin-bottom: 20px; }
+   .vuln-list { list-style: square; padding-left: 20px; }
+   .safe { color: green; font-weight: bold; }
+   .danger { color: darkred; font-weight: bold; }
+   h2, h3 { font-family: sans-serif; }
+    </style>
 </head>
 
 <body>
@@ -159,20 +171,28 @@
   </div>
 
   <h1 style="color:white;"></h1>
-  <h2 id="date" style="color: white;">Zusammenfassung der letzten 3 Tage</h2>
+  <h2 id="date" style="color: white;"></h2>
 
+  <label for="folders" id="lblDdlSites" style="color:white; font-weight:bold;"></label><br><br>
   <select style="width:100%" name="folders" class="styled-select" id="folders" onchange="switchFolder(this.value)">
-    <option value="1">Default</option>
-    <option value="2">Chat</option>
-    <option value="3">Nextcloud</option>
-    <option value="4">vt</option>
-    <option value="5">test</option>
+    <option value="">Lade Optionen…</option>
   </select>
 
-  <div id="http-methods-charts-container" class="section">
+  <div style="display: flex; gap: 1rem; margin-bottom: 1rem;">
+    <button class="section" id="btnRep" onclick="toggleCollapsible('reportContainer')"></button>
+    <button class="section" id="btnIP" onclick="toggleCollapsible('iis')"></button>
+  </div>
+  <div>
+    <div style="overflow: auto;" class="collapsible-content section" id="iis"></div>
+    <div style="overflow: auto;" id="reportContainer" class="collapsible-content section"></div>
+  </div>
+  <div id="systemAndNmapContainer" class="section">
     <div style="width: 50vw;" id="nmap"></div>
     <div style="width: 50vw;" id="system"></div>
   </div>
+
+
+
   <div id="map" class="section"></div>
   <div id="chartsContainer" class="section">
     <div id="barChart"></div>
@@ -185,14 +205,15 @@
     <div id="http-methods-pie-danger"></div>
   </div>
   <div id="domainChart" class="section" style="height: 400px;"></div>
-  <button style="text-align: center; font-weight: bold; " class="collapsible section" onclick="toggleCollapsible('iis')">Details Anzeigen</button>
-  <div style="overflow: auto;" class="collapsible-content section" id="iis"></div>
+
   <div id="accessChart" class="section" style="height: 600px;"></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 
   <script>
+    let map; 
+
     async function loadJSON(path) {
       const response = await fetch(path);
       if (!response.ok) throw new Error(`Fehler beim Laden von ${path}`);
@@ -282,10 +303,12 @@
     function parseSystem(entry) {
 
       let html = "";
-      html = `<p>${translations[currentLang].stDefender} ${entry.DefenderStatus?.AntispywareEnabled ? 'Ja' : 'Nein'}</p>
+      html = `    <p>OS: ${entry.OSName ?? 'Unbekannt'} | Build: ${entry.OSBuild}</p>
+                  <p>Uptime: ${entry.Uptime ?? 'Unbekannt'}</p>
                   <p>${translations[currentLang].stUpdates} ${entry.PendingUpdates ?? 'Unbekannt'}</p>
+                  <p>${translations[currentLang].stDefender} ${entry.DefenderStatus?.AntispywareEnabled ? 'On' : 'Off'}</p>
                   <p>Firewall-Status: ${entry.FirewallState
-          ? entry.FirewallState.map(f => `${f.Name}: ${f.Enabled ? 'An' : 'Aus'}`).join(', ')
+          ? entry.FirewallState.map(f => `${f.Name}: ${f.Enabled ? 'On' : 'Off'}`).join(', ')
           : 'Nicht verfügbar'
         }</p>`;
 
@@ -356,6 +379,45 @@
 
       return html;
     }
+
+    function renderVulnerabilityReportSoftware(data) {
+      if (!Array.isArray(data) || data.length === 0) {
+        return "<p>Keine Daten gefunden.</p>";
+      }
+
+      let html = "";
+
+      data.forEach(entry => {
+        const { Product, Version, MatchedCPE, Vulnerabilities } = entry;
+
+        html += `<div class="product-block">
+          <h3> <strong>${Product}</strong> (Version ${Version})</h3>
+          <p><strong>CPE:</strong> ${MatchedCPE || 'Nicht erkannt'}</p>`;
+
+        if (!Vulnerabilities || Vulnerabilities.length === 0) {
+          html += `<p class="safe"> Keine bekannten Schwachstellen gefunden.</p>`;
+        } else {
+          html += `<p class="danger"> <strong>${Vulnerabilities.length}</strong> Schwachstellen gefunden:</p>
+            <ul class="vuln-list">`;
+
+          Vulnerabilities.forEach(vuln => {
+            html += `<li>
+              <strong>${vuln.id}</strong>: ${vuln.short_description || "Keine Beschreibung"}<br>
+              🗓️ Veröffentlicht: ${new Date(vuln.published).toLocaleDateString()}<br>
+              🔗 <a href="${vuln.href}" target="_blank">Details ansehen</a><br>
+              📈 CVSS Score: <strong>${vuln.ai_score?.value ?? "?"}</strong>
+            </li>`;
+          });
+
+          html += `</ul>`;
+        }
+
+        html += `</div><hr>`;
+      });
+
+      return html;
+    }
+
     function parseVulnerabilityReport(entry) {
       const vulns = entry.TopVulnerabilities;
 
@@ -423,8 +485,13 @@
       "CL": [-35.6751, -71.543]
     };
 
+ 
     function renderMap(ipData) {
-      const map = L.map('map').setView([20, 0], 2);
+      if (map) {
+        map.remove();
+        map = null;
+      }
+      map = L.map('map').setView([20, 0], 2);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 18,
         attribution: '&copy; OpenStreetMap Mitwirkende'
@@ -878,6 +945,8 @@
           DefenderStatus: entry.DefenderStatus,
           PendingUpdates: entry.PendingUpdates,
           FirewallState: entry.FirewallState,
+          Uptime: entry.Uptime,
+          OSName: entry.OSName
         };
       });
 
@@ -897,21 +966,63 @@
       return Object.values(merged);
     }
 
-    function switchFolder(folder) {
-      init(folder);
-      window.location.reload();
+
+
+
+   async function loadDropdownOptions() {
+  try {
+    const response = await fetch("websites.json");
+    const data = await response.json();
+
+    const ddl = document.getElementById("folders");
+    ddl.innerHTML = "";
+
+    data.forEach(site => {
+      const option = document.createElement("option");
+      option.value = site.ID;
+      option.textContent = site.Name;
+      ddl.appendChild(option);
+    });
+
+
+    const savedFolder = localStorage.getItem('selectedFolder');
+    if (savedFolder) {
+      ddl.value = savedFolder;
+
+      await init(savedFolder);
+    } else {
+
+      if (ddl.options.length > 0) {
+        const firstVal = ddl.options[0].value;
+        ddl.value = firstVal;
+        localStorage.setItem('selectedFolder', firstVal);
+        await init(firstVal);
+      }
     }
 
-    addEventListener("DOMContentLoaded", (event) => {
-      let defaultVal = document.getElementById("folders").value;
-      init(defaultVal);
-    });
+
+    ddl.onchange = () => {
+      const val = ddl.value;
+      localStorage.setItem('selectedFolder', val);
+      init(val);  
+    };
+
+  } catch (err) {
+    console.error("Fehler beim Laden der websites.json:", err);
+  }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  loadDropdownOptions();
+});
+
+
 
     async function init(folder) {
       try {
 
         let selectedFolder = folder;
-
+ 
         const index = await loadJSON(`reports/${selectedFolder}/iis/index.json`);
 
         const logFile = index.find(name => name.startsWith("iislog_"));
@@ -923,7 +1034,7 @@
           return;
         }
 
-
+        const swVulnData = await loadJSON('VulnerabilityReport.json');
         const iisData = await loadJSON(`reports/${selectedFolder}/iis/${logFile}`);
         const abuseData = await loadJSON(`reports/${selectedFolder}/iis/${abuseFile}`);
         const nmapData = await loadReportsFromFolder(`reports/${selectedFolder}/nmap`);
@@ -938,6 +1049,9 @@
 
 
         renderList("system", mergedSystemData, parseSystem, translations[currentLang].system);
+
+        console.log(mergedSystemData)
+
         renderList("nmap", nmapData.flat(), parseNmap, "Offene Ports auf Server: ");
 
         console.log("System Builds:", systemEntries.map(e => e.OSBuild));
@@ -967,7 +1081,8 @@
           return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
         }
 
-
+        const html = renderVulnerabilityReportSoftware(swVulnData);
+      document.getElementById("reportContainer").innerHTML = html;
 
         document.getElementById("date").innerHTML = `${formatDate(fromDate)} - ${formatDate(logDate)}`;
 
@@ -990,7 +1105,7 @@
         suspiciousAgents: "Suspicious UserAgents",
         badIPs: "Dangerous IPs according to AbuseIPDB",
         barChart: "Accesses per Country",
-        pieChart: "Malicious vs. Benign Accesses",
+        pieChart: "Malicious vs. Non-Malicious Accesses",
         uriChart: "Requests per URI (Top 15)",
         httpNormal: "HTTP Methods - Benign Access",
         httpDanger: "HTTP Methods - Malicious Access",
@@ -1009,11 +1124,12 @@
         stUpdates: "Pending Updates: ",
         foundvuln: "Vulnerabilities found",
         accessPerDay: "Requests per day",
-        domainChartTitle: "Eindeutige IPs pro Domain",
-        ipCount: "Anzahl eindeutiger IPs",
-        domain: "Domain"
-
-
+        domainChartTitle: "Unique IPs per domain",
+        ipCount: "Number of unique IPs",
+        domain: "Domain",
+        btnSwVulns: "View software security risks",
+        btnDgIps: "Show suspicious IP-Adresses",
+        lblDdlWeb: "IIS-Report for: "
       },
       de: {
         title: "Anwendungsserver",
@@ -1047,7 +1163,10 @@
         accessPerDay: "Zugriffe pro Tag",
         domainChartTitle: "Unique IPs per Domain",
         ipCount: "Number of Unique IPs",
-        domain: "Domain"
+        domain: "Domain",
+        btnSwVulns: "Software-Sicherheitsrisiken anzeigen",
+        btnDgIps: "Verdächtige IPs Anzeigen",
+        lblDdlWeb: "IIS-Report für: "
 
       }
     };
@@ -1058,10 +1177,13 @@
       currentLang = lang;
 
       document.querySelector("h1").textContent = translations[lang].title;
-      document.querySelector("#date").textContent = translations[lang].summary;
       document.querySelector("#system h2") && (document.querySelector("#system h2").textContent = translations[lang].system);
       document.querySelector("#nmap h2") && (document.querySelector("#nmap h2").textContent = translations[lang].nmap);
       document.querySelector("#iis h2") && (document.querySelector("#iis h2").textContent = translations[lang].iisSummary);
+      document.getElementById("lblDdlSites").textContent = translations[lang].lblDdlWeb;
+      document.getElementById("btnRep").textContent = translations[lang].btnSwVulns;
+      document.getElementById("btnIP").textContent = translations[lang].btnDgIps;
+      
 
       try {
         renderBarChart.lastData && renderBarChart(renderBarChart.lastData);
@@ -1088,8 +1210,6 @@
         console.warn("Fehler bei Übersetzung von Diagrammen:", e);
       }
     }
-
   </script>
 </body>
-
 </html>

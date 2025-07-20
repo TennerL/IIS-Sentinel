@@ -2,7 +2,7 @@
     [string]$websiteNr = "",
     [string]$InputFolder = "C:\inetpub\logs\LogFiles\W3SVC$($websiteNr)",
     [string]$OutputFolder = "$PSScriptRoot\reports\$($websiteNr)\iis",
-    [string]$ApiKey = "22ecb550df4ad7d17a42109e1ce5c492c6eda4b37092f3d7ad2c9e90deb32904be16888463680d50"
+    [string]$ApiKey = "XXXX"
 )
 
 

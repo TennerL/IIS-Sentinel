@@ -56,6 +56,9 @@ $apiUrl = "https://cvedb.shodan.io/cves?cpe23=$encodedCpe"
     $vulReport = [PSCustomObject]@{
         OSBuild       = $fullVersion
         TopVulnerabilities = $sorted
+        LastBootTime = $lastBootTime
+        Uptime = $uptime.ToString("dd\.hh\:mm\:ss")
+        OSName = $osInfo.Caption
     }
 
     $vulReport | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 (Join-Path -Path $PSScriptRoot -ChildPath "\reports\$($websiteNr)\system\vulnerabilities_$timestamp.json")
